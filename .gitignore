@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Data & Models
+data/
+*.pth
+*.pt
+*.bin
+*.model
+*.onnx
+
+# Build & Distribution
+build/
+dist/
+*.egg-info/
+*.so
+*.egg
+
+# Notebooks
+.ipynb_checkpoints/
