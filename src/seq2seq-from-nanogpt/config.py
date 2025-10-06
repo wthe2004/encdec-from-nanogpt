@@ -25,7 +25,7 @@ class TrainArgs:
     vocab_size: int = 300
 
     # --- 文件与路径 ---
-    dataset: str = "IWSLT/da2023"
+    dataset_name: str = "IWSLT/da2023"
     lp: str = "en-de"  # language-pair
     tokenizer_path: str = f"bpe_iwslt2023_vocab{vocab_size}.json"
     exp_name: str = f"iwslt2023_seq2seq"
