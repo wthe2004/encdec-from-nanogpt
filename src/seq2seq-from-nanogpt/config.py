@@ -22,12 +22,13 @@ class TrainArgs:
     """
 
     # --- Tokenizer ---
-    vocab_size: int = 300  # (修改) 这是训练BPE的目标词汇表大小
+    vocab_size: int = 300
 
     # --- 文件与路径 ---
-    train_file: str = "./shakespeare.txt"
-    tokenizer_path: str = f"bpe_shakespeare_vocab{vocab_size}.json"
-    exp_name: str = "tinyshakespeare-bpe-gpt"  # (修改) 实验名反映BPE
+    dataset: str = "IWSLT/da2023"
+    lp: str = "en-de"  # language-pair
+    tokenizer_path: str = f"bpe_iwslt2023_vocab{vocab_size}.json"
+    exp_name: str = f"iwslt2023_seq2seq"
     out_dir: str = "runs"
 
     # --- 训练过程 ---
