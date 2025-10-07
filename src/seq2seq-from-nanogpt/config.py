@@ -29,6 +29,7 @@ class TrainArgs:
     lp: str = "en-de"  # language-pair
     tokenizer_path: str = f"bpe_iwslt2023_vocab{vocab_size}.json"
     exp_name: str = f"iwslt2023_seq2seq"
+    split_name: str = "train"
     out_dir: str = "runs"
 
     # --- 训练过程 ---
@@ -39,6 +40,8 @@ class TrainArgs:
     eval_interval: int = 10
     eval_iters: int = 200
     batch_size: int = 64
+    test_ratio: float = 0.1
+    val_ratio: float = 0.1
 
     # --- 模型架构 (嵌套的dataclass) ---
     model: ModelArgs = field(default_factory=ModelArgs)
