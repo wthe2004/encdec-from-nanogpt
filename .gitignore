@@ -16,6 +16,10 @@ venv/
 
 # Data & Models
 data/
+outputs/
+outputs/*
+inputs/
+inputs/*
 *.pth
 *.pt
 *.bin
