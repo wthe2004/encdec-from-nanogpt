@@ -2,16 +2,19 @@
 name = "encdec-from-nanogpt"
 version = "0.1.0"
 description = "A nanoGPT-based Encoder-Decoder model for sequence-to-sequence tasks."
-authors = [
-    {name = "Wentao He", email = "wentaohe@umich.edu"},
-]
-requires-python = ">=3.8"
+authors = [{ name = "Wentao He", email = "wentaohe@umich.edu" }]
+requires-python = ">=3.10"
 
 # 这里是核心依赖项
 dependencies = [
-    "torch",
     "transformers",
-    "datasets>=2.0.0",
     "sacrebleu",
     "tqdm",
+    "torch>=2.5.1",
+    "datasets==3.6.0",
+    "tokenizers>=0.22.1",
+    "ipykernel>=6.30.1",
+    "black>=25.9.0",
+    "pyright>=1.1.406",
+    "tyro>=0.9.32",
 ]
