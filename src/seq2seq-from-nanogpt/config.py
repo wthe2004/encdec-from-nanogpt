@@ -27,10 +27,10 @@ class TrainArgs:
     # --- 文件与路径 ---
     dataset_name: str = "IWSLT/da2023"
     lp: str = "en-de"  # language-pair
-    tokenizer_path: str = f"bpe_iwslt2023_vocab{vocab_size}.json"
+    tokenizer_path: str = f"outputs/bpe_iwslt2023_vocab{vocab_size}.json"
     exp_name: str = f"iwslt2023_seq2seq"
     split_name: str = "train"
-    out_dir: str = "runs"
+    out_dir: str = "outputs"
 
     # --- 训练过程 ---
     device: str = "cuda" if __import__("torch").cuda.is_available() else "cpu"
