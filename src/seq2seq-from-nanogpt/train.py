@@ -153,6 +153,8 @@ if __name__ == "__main__":
                         "epoch": epoch,
                         "model_state_dict": model.state_dict(),
                         "optimizer_state_dict": optimizer.state_dict(),
+                        "model_args": args.model,
+                        "tokenizer_str": tokenizer.to_str(),
                         "train_loss": losses["train"],
                         "val_loss": losses["val"],
                     },
@@ -203,6 +205,8 @@ if __name__ == "__main__":
             "step": global_step,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
+            "model_args": args.model,
+            "tokenizer_str": tokenizer.to_str(),
         },
         final_model_path,
     )
