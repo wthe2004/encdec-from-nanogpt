@@ -30,7 +30,7 @@ class Head(nn.Module):
             q @ k.transpose(-2, -1) * (self.head_size**-0.5)
         )  # (B,T,head_size) @ (B,head_size,T) -> (B,T,T)
         if mask is not None:
-            wei = wei.masked_fill(mask == 0, float("-inf"))  # (B,T,T)
+            wei = wei.masked_fill(mask.squeeze(1) == 0, float("-inf"))  # (B,T,T)
         wei = F.softmax(wei, dim=-1)  # (B,T,T)
         wei = self.dropout(wei)
 
@@ -240,55 +240,67 @@ class Seq2SeqTransformer(nn.Module):
         self,
         src,
         max_new_tokens,
-        top_k=None,
+        top_p=0.9,
         temperature=1.0,
         sos_token_id=1,
         eos_token_id=2,
+        pad_token_id=0,
     ):
         """
-        Generate new tokens given a source sequence.
-        Args:
-            src: (B, T_src) source input sequence
-            max_new_tokens: int, number of tokens to generate
-            top_k: int or None, if not None, use top-k sampling
-            temperature: float, temperature for sampling
-            sos_token_id: int, start-of-sequence token id
-            eos_token_id: int, end-of-sequence token id
-        Returns:
-            generated: (B, T_src + max_new_tokens)
+        Nucleus (top-p) sampling - 更灵活的采样策略
         """
+        self.eval()
         B, T_src = src.size()
         device = src.device
+
         src_mask = self.create_padding_mask(src)
-        enc_output = self.encode(src, src_mask)  # (B, T_src, n_embd)
-        tgt = torch.full(
-            (B, 1), sos_token_id, dtype=torch.long, device=device
-        )  # (B, 1), start with <sos>
+        enc_output = self.encode(src, src_mask)
+
+        tgt = torch.full((B, 1), sos_token_id, dtype=torch.long, device=device)
+        finished = torch.zeros(B, dtype=torch.bool, device=device)
 
         for _ in range(max_new_tokens):
-            _, T = tgt.size()
-
-            if T > self.args.block_size:
-                tgt_input = tgt[:, -self.args.block_size :]  # crop to block size
-            else:
-                tgt_input = tgt
-            _, T = tgt_input.size()
-
-            causal_mask = self.create_look_ahead_mask(T).to(device)  # (1, 1, T, T)
-            dec_output = self.decode(
-                tgt_input, enc_output, tgt_mask=causal_mask, src_mask=src_mask
-            )  # (B, T, n_embd)
-            logits = self.lm_head(dec_output)  # (B, T, vocab_size
-            logits = (
-                logits[:, -1, :] / temperature
-            )  # (B, vocab_size), focus on last token
-            if top_k is not None:
-                v, _ = torch.topk(logits, top_k)
-                logits[logits < v[:, [-1]]] = -float("Inf")
-            probs = F.softmax(logits, dim=-1)  # (B, vocab_size)
-
-            next_token = torch.multinomial(probs, num_samples=1)  # (B, 1)
-            tgt = torch.cat((tgt, next_token), dim=1)
-            if (next_token == eos_token_id).all():
+            if finished.all():
                 break
-        return tgt  # (B, T_src + max_new_tokens)
+
+            _, T = tgt.size()
+            tgt_input = (
+                tgt[:, -self.args.block_size :] if T > self.args.block_size else tgt
+            )
+            T_input = tgt_input.size(1)
+
+            causal_mask = self.create_look_ahead_mask(T_input).to(device)
+
+            with torch.no_grad():
+                dec_output = self.decode(
+                    tgt_input, enc_output, tgt_mask=causal_mask, src_mask=src_mask
+                )
+                logits = self.lm_head(dec_output[:, -1, :]) / temperature
+                probs = F.softmax(logits, dim=-1)
+
+                # Nucleus sampling
+                sorted_probs, sorted_indices = torch.sort(
+                    probs, descending=True, dim=-1
+                )
+                cumsum_probs = torch.cumsum(sorted_probs, dim=-1)
+
+                # Remove tokens with cumulative probability above threshold
+                sorted_indices_to_remove = cumsum_probs > top_p
+                sorted_indices_to_remove[:, 1:] = sorted_indices_to_remove[
+                    :, :-1
+                ].clone()
+                sorted_indices_to_remove[:, 0] = 0
+
+                # Set removed token probabilities to 0
+                for i in range(B):
+                    indices_to_remove = sorted_indices[i, sorted_indices_to_remove[i]]
+                    probs[i, indices_to_remove] = 0
+
+                # Renormalize
+                probs = probs / probs.sum(dim=-1, keepdim=True)
+                next_token = torch.multinomial(probs, num_samples=1)
+
+            next_token = next_token.masked_fill(finished.unsqueeze(1), pad_token_id)
+            tgt = torch.cat([tgt, next_token], dim=1)
+            finished = finished | (next_token.squeeze(1) == eos_token_id)
+        return tgt[:, 1:]

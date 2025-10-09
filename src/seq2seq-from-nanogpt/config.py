@@ -8,7 +8,7 @@ class ModelArgs:
     Arguments related to the model architecture.
     """
 
-    block_size: int = 256
+    block_size: int = 128
     n_embd: int = 384
     n_layers: int = 6
     num_heads: int = 6  # 注意：我们把默认头数统一为6
@@ -39,9 +39,10 @@ class TrainArgs:
     max_iters: int = 50
     eval_interval: int = 10
     eval_iters: int = 200
-    batch_size: int = 64
+    batch_size: int = 16
     test_ratio: float = 0.1
     val_ratio: float = 0.1
+    max_epochs: int = 1
 
     # --- 模型架构 (嵌套的dataclass) ---
     model: ModelArgs = field(default_factory=ModelArgs)
