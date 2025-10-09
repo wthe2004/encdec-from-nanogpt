@@ -142,10 +142,19 @@ class Seq2SeqTransformer(nn.Module):
     The main Transformer Decoder model. Renamed from BigramLanguageModel for clarity.
     """
 
-    def __init__(self, vocab_size: int, args: ModelArgs, pad_token_id: int = 0):
+    def __init__(
+        self,
+        vocab_size: int,
+        args: ModelArgs,
+        sos_token_id=1,
+        eos_token_id=2,
+        pad_token_id: int = 0,
+    ):
         super().__init__()
         self.args = args
         self.pad_token_id = pad_token_id
+        self.sos_token_id = pad_token_id
+        self.eos_token_id = pad_token_id
 
         # encoder components
         self.src_token_embedding = nn.Embedding(vocab_size, args.n_embd)
@@ -242,9 +251,6 @@ class Seq2SeqTransformer(nn.Module):
         max_new_tokens,
         top_p=0.9,
         temperature=1.0,
-        sos_token_id=1,
-        eos_token_id=2,
-        pad_token_id=0,
     ):
         """
         Nucleus (top-p) sampling - 更灵活的采样策略
@@ -256,7 +262,7 @@ class Seq2SeqTransformer(nn.Module):
         src_mask = self.create_padding_mask(src)
         enc_output = self.encode(src, src_mask)
 
-        tgt = torch.full((B, 1), sos_token_id, dtype=torch.long, device=device)
+        tgt = torch.full((B, 1), self.sos_token_id, dtype=torch.long, device=device)
         finished = torch.zeros(B, dtype=torch.bool, device=device)
 
         for _ in range(max_new_tokens):
@@ -300,7 +306,9 @@ class Seq2SeqTransformer(nn.Module):
                 probs = probs / probs.sum(dim=-1, keepdim=True)
                 next_token = torch.multinomial(probs, num_samples=1)
 
-            next_token = next_token.masked_fill(finished.unsqueeze(1), pad_token_id)
+            next_token = next_token.masked_fill(
+                finished.unsqueeze(1), self.pad_token_id
+            )
             tgt = torch.cat([tgt, next_token], dim=1)
-            finished = finished | (next_token.squeeze(1) == eos_token_id)
+            finished = finished | (next_token.squeeze(1) == self.eos_token_id)
         return tgt[:, 1:]

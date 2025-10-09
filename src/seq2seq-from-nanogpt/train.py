@@ -59,7 +59,10 @@ if __name__ == "__main__":
     )
 
     pad_token_id = tokenizer.token_to_id("[PAD]")
+    sos_token_id = tokenizer.token_to_id("[CLS]")
+    eos_token_id = tokenizer.token_to_id("[SEP]")
     collate_fn = create_collate_fn(pad_token_id)
+
     train_loader = DataLoader(
         train_data,
         batch_size=args.batch_size,
@@ -89,7 +92,11 @@ if __name__ == "__main__":
     )
 
     model = Seq2SeqTransformer(
-        vocab_size=vocab_size, args=args.model, pad_token_id=pad_token_id
+        vocab_size=vocab_size,
+        args=args.model,
+        pad_token_id=pad_token_id,
+        sos_token_id=sos_token_id,
+        eos_token_id=eos_token_id,
     ).to(args.device)
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
 
