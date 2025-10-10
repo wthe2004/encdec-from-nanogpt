@@ -13,14 +13,22 @@ class IWSLTDataset(Dataset):
         self.data = dataset[split]  # already tokenized
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.sos_id = tokenizer.token_to_id("[CLS]")
+        self.eos_id = tokenizer.token_to_id("[SEP]")
+        self.pad_id = tokenizer.token_to_id("[PAD]")
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
+        max_len_inner = self.max_length - 2  # for [CLS] and [SEP]
         return {
-            "src_tokens": self.data[idx]["src_tokens"][: self.max_length],
-            "tgt_tokens": self.data[idx]["tgt_tokens"][: self.max_length],
+            "src_tokens": [self.sos_id]
+            + self.data[idx]["src_tokens"][:max_len_inner]
+            + [self.eos_id],
+            "tgt_tokens": [self.sos_id]
+            + self.data[idx]["tgt_tokens"][:max_len_inner]
+            + [self.eos_id],
         }
 
 

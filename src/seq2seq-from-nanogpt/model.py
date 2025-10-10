@@ -153,8 +153,8 @@ class Seq2SeqTransformer(nn.Module):
         super().__init__()
         self.args = args
         self.pad_token_id = pad_token_id
-        self.sos_token_id = pad_token_id
-        self.eos_token_id = pad_token_id
+        self.sos_token_id = sos_token_id
+        self.eos_token_id = eos_token_id
 
         # encoder components
         self.src_token_embedding = nn.Embedding(vocab_size, args.n_embd)
@@ -253,7 +253,7 @@ class Seq2SeqTransformer(nn.Module):
         temperature=1.0,
     ):
         """
-        Nucleus (top-p) sampling - 更灵活的采样策略
+        Nucleus (top-p) sampling
         """
         self.eval()
         B, T_src = src.size()

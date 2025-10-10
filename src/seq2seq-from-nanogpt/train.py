@@ -9,9 +9,26 @@ from bpe_tokenizer import get_bpe_tokenizer
 # 从我们自己的模块中导入
 from config import TrainArgs
 from model import Seq2SeqTransformer
-from datasets import load_dataset
+import datasets
 from torch.utils.data import DataLoader, random_split
 from preprocess_data import IWSLTDataset, create_tokenize_batch, create_collate_fn
+
+
+def create_manual_data():
+    return {
+        "src": [
+            "hello world",
+            "how are you",
+            "this is a test",
+            "overfitting is successful",
+        ],
+        "ref": [
+            "eins zwei polizei",
+            "drei vier grenadier",
+            "fünf sechs offizier",
+            "sieben acht gute nacht",
+        ],
+    }
 
 
 if __name__ == "__main__":
@@ -26,12 +43,30 @@ if __name__ == "__main__":
     print(f"All results will be saved in: {save_path}")
 
     # --- 数据加载与预处理 (使用BPE) ---
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
     tokenizer = get_bpe_tokenizer(
         args.dataset_name, args.vocab_size, args.tokenizer_path, args.lp
     )
     vocab_size = tokenizer.get_vocab_size()
 
-    dataset = load_dataset(args.dataset_name).filter(lambda x: x["lp"] == args.lp)
+    # dataset = datasets.load_dataset(args.dataset_name).filter(lambda x: x["lp"] == args.lp)
+
+    if getattr(args, "overfit_test", False):
+        print("=" * 50)
+        print("RUNNING IN OVERFIT TEST MODE")
+        print("=" * 50)
+        args.model.n_embd, args.model.n_layers, args.model.num_heads = 64, 2, 2
+        args.batch_size, args.max_epochs = 4, 1001
+
+        manual_data_dict = create_manual_data()
+        dataset = datasets.Dataset.from_dict(manual_data_dict)
+        dataset = datasets.DatasetDict({"train": dataset})
+        args.split_name = "train"
+
+    else:
+        dataset = datasets.load_dataset(args.dataset_name).filter(
+            lambda x: x["lp"] == args.lp
+        )
 
     tokenized_dataset = dataset.map(
         create_tokenize_batch(tokenizer),
