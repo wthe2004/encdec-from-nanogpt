@@ -2,8 +2,6 @@ import os
 from datasets import load_dataset
 from tokenizers import Tokenizer, models, trainers, pre_tokenizers
 from tokenizers.decoders import ByteLevel as ByteLevelDecoder
-from tokenizers.models import BPE
-from tokenizers.trainers import BpeTrainer
 
 
 def batch_iterator(dataset, batch_size=1000):
