@@ -34,7 +34,9 @@ if __name__ == "__main__":
     train_data, test_data = data[:n], data[n:]
 
     # --- 模型初始化 ---
-    model = TransformerDecoder(vocab_size, args.model).to(args.device)
+    model = TransformerDecoder(
+        vocab_size, args.model, pad_token_id=tokenizer.token_to_id("[PAD]")
+    ).to(args.device)
 
     # --- 辅助函数 ---
     def get_batch(split):

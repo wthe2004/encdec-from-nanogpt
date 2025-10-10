@@ -1,28 +1,11 @@
 from datasets import load_dataset
-from tokenizers import Tokenizer
 import torch
 import os
 from datetime import datetime
-from tokenizers import Tokenizer, models, trainers, pre_tokenizers
 import tyro
 from bpe_tokenizer import get_bpe_tokenizer
 from config import TrainArgs
-from model import TransformerDecoder
 from torch.utils.data import DataLoader, random_split, Dataset
-
-
-def tokenize_item(example):
-    return {
-        "src_tokens": [tokenizer.encode(example["src"]).ids],
-        "tgt_tokens": [tokenizer.encode(example["ref"]).ids],
-    }
-
-
-def tokenize_batch(examples):
-    return {
-        "src_tokens": [tokenizer.encode(text).ids for text in examples["src"]],
-        "tgt_tokens": [tokenizer.encode(text).ids for text in examples["ref"]],
-    }
 
 
 class IWSLTDataset(Dataset):
@@ -30,45 +13,65 @@ class IWSLTDataset(Dataset):
         self.data = dataset[split]  # already tokenized
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.sos_id = tokenizer.token_to_id("[CLS]")
+        self.eos_id = tokenizer.token_to_id("[SEP]")
+        self.pad_id = tokenizer.token_to_id("[PAD]")
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
+        max_len_inner = self.max_length - 2  # for [CLS] and [SEP]
         return {
-            "src_tokens": self.data[idx]["src_tokens"][: self.max_length],
-            "tgt_tokens": self.data[idx]["tgt_tokens"][: self.max_length],
+            "src_tokens": [self.sos_id]
+            + self.data[idx]["src_tokens"][:max_len_inner]
+            + [self.eos_id],
+            "tgt_tokens": [self.sos_id]
+            + self.data[idx]["tgt_tokens"][:max_len_inner]
+            + [self.eos_id],
         }
 
 
-def collate_fn(batch):
-    src_tokens = [item["src_tokens"] for item in batch]
-    tgt_tokens = [item["tgt_tokens"] for item in batch]
+def create_tokenize_batch(tokenizer):
+    def tokenize_batch(examples):
+        return {
+            "src_tokens": [tokenizer.encode(text).ids for text in examples["src"]],
+            "tgt_tokens": [tokenizer.encode(text).ids for text in examples["ref"]],
+        }
 
-    max_src_len = max(len(tokens) for tokens in src_tokens)
-    max_tgt_len = max(len(tokens) for tokens in tgt_tokens)
+    return tokenize_batch
 
-    pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
 
-    padded_src_tokens = []
-    padded_tgt_tokens = []
+def create_collate_fn(pad_token_id):
+    def collate_fn(batch):
+        src_tokens = [item["src_tokens"] for item in batch]
+        tgt_tokens = [item["tgt_tokens"] for item in batch]
 
-    for src, tgt in zip(src_tokens, tgt_tokens):
-        padded_src = src + [pad_token_id] * (max_src_len - len(src))
-        padded_src_tokens.append(padded_src)
-        padded_tgt = tgt + [pad_token_id] * (max_tgt_len - len(tgt))
-        padded_tgt_tokens.append(padded_tgt)
+        max_src_len = max(len(tokens) for tokens in src_tokens)
+        max_tgt_len = max(len(tokens) for tokens in tgt_tokens)
 
-    return {
-        "src_tokens": torch.tensor(padded_src_tokens, dtype=torch.long),
-        "tgt_tokens": torch.tensor(padded_tgt_tokens, dtype=torch.long),
-        "src_padding_mask": (
-            torch.tensor(padded_src_tokens, dtype=torch.long) != pad_token_id
-        ).long(),
-    }
+        padded_src_tokens = []
+        padded_tgt_tokens = []
+
+        for src, tgt in zip(src_tokens, tgt_tokens):
+            padded_src = src + [pad_token_id] * (max_src_len - len(src))
+            padded_src_tokens.append(padded_src)
+            padded_tgt = tgt + [pad_token_id] * (max_tgt_len - len(tgt))
+            padded_tgt_tokens.append(padded_tgt)
+
+        return {
+            "src_tokens": torch.tensor(padded_src_tokens, dtype=torch.long),
+            "tgt_tokens": torch.tensor(padded_tgt_tokens, dtype=torch.long),
+            "src_padding_mask": (
+                torch.tensor(padded_src_tokens, dtype=torch.long) != pad_token_id
+            ).long(),
+        }
+
+    return collate_fn
 
 
 if __name__ == "__main__":
+
     args = tyro.cli(TrainArgs)
 
     torch.manual_seed(args.seed)
@@ -79,13 +82,24 @@ if __name__ == "__main__":
     os.makedirs(save_path, exist_ok=True)
     print(f"All results will be saved in: {save_path}")
 
-    # --- 数据加载与预处理 (使用BPE) ---
     tokenizer = get_bpe_tokenizer(
         args.dataset_name, args.vocab_size, args.tokenizer_path, args.lp
     )
     vocab_size = tokenizer.get_vocab_size()
 
     dataset = load_dataset(args.dataset_name).filter(lambda x: x["lp"] == args.lp)
+
+    def tokenize_item(example):
+        return {
+            "src_tokens": [tokenizer.encode(example["src"]).ids],
+            "tgt_tokens": [tokenizer.encode(example["ref"]).ids],
+        }
+
+    def tokenize_batch(examples, tokenizer=None):
+        return {
+            "src_tokens": [tokenizer.encode(text).ids for text in examples["src"]],
+            "tgt_tokens": [tokenizer.encode(text).ids for text in examples["ref"]],
+        }
 
     tokenized_dataset = dataset.map(
         tokenize_batch,

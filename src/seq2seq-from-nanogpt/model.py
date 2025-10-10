@@ -12,30 +12,29 @@ class Head(nn.Module):
 
     def __init__(self, args: ModelArgs):
         super().__init__()
-        head_size = args.n_embd // args.num_heads
-        self.key = nn.Linear(args.n_embd, head_size, bias=False)
-        self.query = nn.Linear(args.n_embd, head_size, bias=False)
-        self.value = nn.Linear(args.n_embd, head_size, bias=False)
-        self.register_buffer(
-            "tril", torch.tril(torch.ones(args.block_size, args.block_size))
-        )  # 下三角矩阵
+        self.head_size = args.n_embd // args.num_heads
+        self.key = nn.Linear(args.n_embd, self.head_size, bias=False)
+        self.query = nn.Linear(args.n_embd, self.head_size, bias=False)
+        self.value = nn.Linear(args.n_embd, self.head_size, bias=False)
         self.dropout = nn.Dropout(args.dropout)
 
-    def forward(self, x):
-        B, T, C = x.shape
-        k = self.key(x)  # (B,T,head_size)
-        q = self.query(x)  # (B,T,head_size)
-
+    def forward(self, query, key, value, mask=None):
+        # print(x.shape)
+        # self attention: q=k=v=x
+        # cross-attention: q=target, k=v=source
+        k = self.key(key)
+        q = self.query(query)
+        v = self.value(value)
         # 计算注意力分数 ("affinities")
         wei = (
-            q @ k.transpose(-2, -1) * C**-0.5
+            q @ k.transpose(-2, -1) * (self.head_size**-0.5)
         )  # (B,T,head_size) @ (B,head_size,T) -> (B,T,T)
-        wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))  # (B,T,T)
+        if mask is not None:
+            wei = wei.masked_fill(mask.squeeze(1) == 0, float("-inf"))  # (B,T,T)
         wei = F.softmax(wei, dim=-1)  # (B,T,T)
         wei = self.dropout(wei)
 
         # 对 value 进行加权聚合
-        v = self.value(x)  # (B,T,head_size)
         out = wei @ v  # (B,T,T) @ (B,T,head_size) -> (B,T,head_size)
         return out
 
@@ -47,13 +46,27 @@ class MultiHeadAttention(nn.Module):
 
     def __init__(self, args: ModelArgs):
         super().__init__()
-        self.heads = nn.ModuleList([Head(args) for _ in range(args.num_heads)])
+        self.heads = nn.ModuleList(
+            [
+                Head(
+                    args,
+                )
+                for _ in range(args.num_heads)
+            ]
+        )
         self.proj = nn.Linear(args.n_embd, args.n_embd)
         self.dropout = nn.Dropout(args.dropout)
 
-    def forward(self, x):
-        out = torch.cat([h(x) for h in self.heads], dim=-1)
+    def forward(self, query, key, value, mask=None):
+        # print(f"MultiHeadAttention input x shape: {x.shape}")
+        head_outputs = [
+            h(query=query, key=key, value=value, mask=mask) for h in self.heads
+        ]
+        # print(f"Head outputs shapes: {[h.shape for h in head_outputs]}")
+        out = torch.cat(head_outputs, dim=-1)
+        # print(f"Concatenated output shape: {out.shape}")
         out = self.dropout(self.proj(out))
+        # print(f"MultiHeadAttention output shape: {out.shape}")
         return out
 
 
@@ -75,77 +88,227 @@ class FeedForward(nn.Module):
         return self.net(x)
 
 
-class Block(nn.Module):
+class EncoderBlock(nn.Module):
     """
-    Transformer block: communication followed by computation.
+    Transformer block: self-attention + feedforward, with layernorm and residuals.
     """
 
     def __init__(self, args: ModelArgs):
         super().__init__()
-        self.sa = MultiHeadAttention(args)
+        self.self_attn = MultiHeadAttention(args)
         self.ffwd = FeedForward(args)
         self.ln1 = nn.LayerNorm(args.n_embd)
         self.ln2 = nn.LayerNorm(args.n_embd)
 
-    def forward(self, x):
-        x = x + self.sa(self.ln1(x))
+    def forward(self, x, mask=None):
+        x = x + self.self_attn(
+            query=self.ln1(x), key=self.ln1(x), value=self.ln1(x), mask=mask
+        )
         x = x + self.ffwd(self.ln2(x))
         return x
 
 
-class TransformerDecoder(nn.Module):
+class DecoderBlock(nn.Module):
+    """
+    Transformer block: masked self-attention + cross-attention + feedforward, with layernorm and residuals.
+    """
+
+    def __init__(self, args: ModelArgs):
+        super().__init__()
+        self.self_attn = MultiHeadAttention(args)
+        self.cross_attn = MultiHeadAttention(args)
+        self.ffwd = FeedForward(args)
+        self.ln1 = nn.LayerNorm(args.n_embd)
+        self.ln2 = nn.LayerNorm(args.n_embd)
+        self.ln3 = nn.LayerNorm(args.n_embd)
+        self.ln_enc = nn.LayerNorm(args.n_embd)
+
+    def forward(self, x, enc_output, tgt_mask=None, src_mask=None):
+        x = x + self.self_attn(
+            query=self.ln1(x), key=self.ln1(x), value=self.ln1(x), mask=tgt_mask
+        )
+        x = x + self.cross_attn(
+            query=self.ln2(x),
+            key=self.ln_enc(enc_output),
+            value=self.ln_enc(enc_output),
+            mask=src_mask,
+        )
+        x = x + self.ffwd(self.ln3(x))
+        return x
+
+
+class Seq2SeqTransformer(nn.Module):
     """
     The main Transformer Decoder model. Renamed from BigramLanguageModel for clarity.
     """
 
-    def __init__(self, vocab_size: int, args: ModelArgs):
+    def __init__(
+        self,
+        vocab_size: int,
+        args: ModelArgs,
+        sos_token_id=1,
+        eos_token_id=2,
+        pad_token_id: int = 0,
+    ):
         super().__init__()
         self.args = args
-        self.token_embedding_table = nn.Embedding(vocab_size, args.n_embd)
-        self.position_embedding_table = nn.Embedding(args.block_size, args.n_embd)
-        self.blocks = nn.Sequential(*[Block(args) for _ in range(args.n_layers)])
-        self.ln_f = nn.LayerNorm(args.n_embd)  # final layer norm
+        self.pad_token_id = pad_token_id
+        self.sos_token_id = sos_token_id
+        self.eos_token_id = eos_token_id
+
+        # encoder components
+        self.src_token_embedding = nn.Embedding(vocab_size, args.n_embd)
+        self.src_position_embedding = nn.Embedding(args.block_size, args.n_embd)
+        self.encoder_blocks = nn.ModuleList(
+            [EncoderBlock(args) for _ in range(args.n_layers)]
+        )
+        self.encoder_ln = nn.LayerNorm(args.n_embd)
+
+        # decoder components
+        self.tgt_token_embedding = nn.Embedding(vocab_size, args.n_embd)
+        self.tgt_position_embedding = nn.Embedding(args.block_size, args.n_embd)
+        self.decoder_blocks = nn.ModuleList(
+            [DecoderBlock(args) for _ in range(args.n_layers)]
+        )
+        self.decoder_ln = nn.LayerNorm(args.n_embd)
+
+        # Output projection layer
         self.lm_head = nn.Linear(args.n_embd, vocab_size)
 
-    def forward(self, idx, targets=None):
-        B, T = idx.shape
-        device = idx.device
+    def create_padding_mask(self, seq):
+        # seq: (B, T)
+        mask = seq != self.pad_token_id
+        return mask.view(seq.size(0), 1, 1, seq.size(1))
+        # (B, 1, 1, T) -> broadcast to (B, num_heads, T, T) in attention
 
-        tok_emb = self.token_embedding_table(idx)  # (B,T,C)
-        pos_emb = self.position_embedding_table(torch.arange(T, device=device))  # (T,C)
-        x = tok_emb + pos_emb  # (B,T,C) 位置编码加上词嵌入
-        x = self.blocks(x)  # (B,T,C)
-        x = self.ln_f(x)  # (B,T,C)
-        logits = self.lm_head(x)  # (B,T,vocab_size)
+    def create_look_ahead_mask(self, size):
+        mask = torch.tril(torch.ones(size, size)).to(torch.bool)  # (T, T)
+        return mask.view(1, 1, size, size)  # (1, 1, T, T) for broadcasting
 
-        if targets is None:
-            loss = None
-        else:
-            B, T, C = logits.shape
-            logits_flat = logits.view(B * T, C)
-            targets_flat = targets.view(B * T)
-            loss = F.cross_entropy(logits_flat, targets_flat)
+    def encode(self, src, src_mask=None):
+        B, T = src.size()
 
-        return logits, loss
+        tok_emb = self.src_token_embedding(src)  # (B,T,n_embd)
+        pos = torch.arange(0, T, device=src.device).view(1, T)  # (1,T)
+        pos_emb = self.src_position_embedding(pos)  # (1,T,n_embd)
+        x = tok_emb + pos_emb  # (B,T,n_embd)
 
-    @torch.no_grad()
-    def generate(self, idx, max_new_tokens):
+        for block in self.encoder_blocks:
+            x = block(x, mask=src_mask)
+
+        x = self.encoder_ln(x)
+        return x  # (B,T,n_embd)
+
+    def decode(self, tgt, enc_output, tgt_mask=None, src_mask=None):
+        _, T = tgt.size()
+
+        tok_emb = self.tgt_token_embedding(tgt)  # (B,T,n_embd)
+        pos = torch.arange(0, T, dtype=torch.long, device=tgt.device).view(
+            1, T
+        )  # (1,T)
+        pos_emb = self.tgt_position_embedding(pos)  # (1,T,n_embd)
+        x = tok_emb + pos_emb  # (B,T,n_embd)
+
+        for block in self.decoder_blocks:
+            x = block(x, enc_output, tgt_mask=tgt_mask, src_mask=src_mask)
+
+        x = self.decoder_ln(x)
+        return x  # (B,T,n_embd)
+
+    def forward(self, src, tgt, src_mask=None, tgt_mask=None):
         """
-        Generate new tokens given a context.
+        Take in and process masked src and target sequences.
+        B means batch size, T means sequence length.
+        Args:
+            src: (B, T_src)
+            tgt: (B, T_tgt)
+            src_mask: (B, 1, 1, T_src)
+            tgt_mask: (B, 1, T_tgt, T_tgt)
+        Returns:
+            logits: (B, T_tgt, vocab_size)
+        """
+        if src_mask is None:
+            src_mask = self.create_padding_mask(src)  # (B, 1, 1, T_src)
+
+        if tgt_mask is None:
+            T = tgt.size(1)
+            causal_mask = self.create_look_ahead_mask(T).to(tgt.device)  # (1, 1, T, T)
+            padding_mask = self.create_padding_mask(tgt).to(tgt.device)  # (B, 1, 1, T)
+            padding_mask = padding_mask.expand(-1, 1, T, -1)  # (B, 1, T, T)
+
+            tgt_mask = causal_mask & padding_mask  # (B, 1, T, T)
+
+        enc_output = self.encode(src, src_mask)  # (B, T_src, n_embd)
+        dec_output = self.decode(
+            tgt, enc_output, tgt_mask, src_mask
+        )  # (B, T_tgt, n_embd)
+        logits = self.lm_head(dec_output)  # (B, T_tgt, vocab_size)
+        return logits
+
+    def generate(
+        self,
+        src,
+        max_new_tokens,
+        top_p=0.9,
+        temperature=1.0,
+    ):
+        """
+        Nucleus (top-p) sampling
         """
         self.eval()
+        B, T_src = src.size()
+        device = src.device
+
+        src_mask = self.create_padding_mask(src)
+        enc_output = self.encode(src, src_mask)
+
+        tgt = torch.full((B, 1), self.sos_token_id, dtype=torch.long, device=device)
+        finished = torch.zeros(B, dtype=torch.bool, device=device)
+
         for _ in range(max_new_tokens):
-            # 裁剪 idx 以确保不超过 block_size
-            idx_cond = idx[:, -self.args.block_size :]
-            # 获取预测
-            logits, _ = self(idx_cond)
-            # 只关注最后一个时间步
-            logits = logits[:, -1, :]  # 变为 (B, C)
-            # 应用 softmax 得到概率
-            probs = F.softmax(logits, dim=-1)  # (B, C)
-            # 从分布中采样
-            idx_next = torch.multinomial(probs, num_samples=1)  # (B, 1)
-            # 将采样的索引附加到运行序列中
-            idx = torch.cat((idx, idx_next), dim=1)  # (B, T+1)
-        self.train()
-        return idx
+            if finished.all():
+                break
+
+            _, T = tgt.size()
+            tgt_input = (
+                tgt[:, -self.args.block_size :] if T > self.args.block_size else tgt
+            )
+            T_input = tgt_input.size(1)
+
+            causal_mask = self.create_look_ahead_mask(T_input).to(device)
+
+            with torch.no_grad():
+                dec_output = self.decode(
+                    tgt_input, enc_output, tgt_mask=causal_mask, src_mask=src_mask
+                )
+                logits = self.lm_head(dec_output[:, -1, :]) / temperature
+                probs = F.softmax(logits, dim=-1)
+
+                # Nucleus sampling
+                sorted_probs, sorted_indices = torch.sort(
+                    probs, descending=True, dim=-1
+                )
+                cumsum_probs = torch.cumsum(sorted_probs, dim=-1)
+
+                # Remove tokens with cumulative probability above threshold
+                sorted_indices_to_remove = cumsum_probs > top_p
+                sorted_indices_to_remove[:, 1:] = sorted_indices_to_remove[
+                    :, :-1
+                ].clone()
+                sorted_indices_to_remove[:, 0] = 0
+
+                # Set removed token probabilities to 0
+                for i in range(B):
+                    indices_to_remove = sorted_indices[i, sorted_indices_to_remove[i]]
+                    probs[i, indices_to_remove] = 0
+
+                # Renormalize
+                probs = probs / probs.sum(dim=-1, keepdim=True)
+                next_token = torch.multinomial(probs, num_samples=1)
+
+            next_token = next_token.masked_fill(
+                finished.unsqueeze(1), self.pad_token_id
+            )
+            tgt = torch.cat([tgt, next_token], dim=1)
+            finished = finished | (next_token.squeeze(1) == self.eos_token_id)
+        return tgt[:, 1:]
